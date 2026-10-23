@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment files — commit only the .env.example templates
+.env
+.env.*
+!.env.example
+# Test settings hold only local throwaway credentials
+!backend/.env.test
+
+# Generated Prisma client (rebuilt by `npm install` / `npm run prisma:generate`)
+backend/src/generated/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Python virtual environment
+venv/
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

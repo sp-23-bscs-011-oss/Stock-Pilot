@@ -1,0 +1,25 @@
+# Local PostgreSQL for StockPilot development.
+# Start:  docker compose up -d     Stop: docker compose down     Wipe data: docker compose down -v
+# Published on host port 5433 so it can coexist with a native PostgreSQL on 5432.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: stockpilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpilot}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpilot}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - stockpilot-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stockpilot-pgdata:

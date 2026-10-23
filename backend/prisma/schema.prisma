@@ -1,0 +1,389 @@
+// StockPilot database schema.
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Authentication & access control (Phase 2) ───────────────────────────────
+
+enum Role {
+  OWNER
+  MANAGER
+  CASHIER
+}
+
+model User {
+  id                 String    @id @default(uuid()) @db.Uuid
+  /// Always stored lower-cased and trimmed; see normalizeEmail().
+  email              String    @unique @db.VarChar(254)
+  name               String    @db.VarChar(100)
+  passwordHash       String    @map("password_hash") @db.VarChar(100)
+  role               Role
+  isActive           Boolean   @default(true) @map("is_active")
+  /// Set when someone else chose the password (new staff accounts); cleared on change.
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
+  passwordChangedAt  DateTime  @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt        DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdById        String?   @map("created_by_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy    User?     @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers User[]    @relation("UserCreatedBy")
+  sessions     Session[]
+
+  productsCreated  Product[]       @relation("ProductCreatedBy")
+  productsUpdated  Product[]       @relation("ProductUpdatedBy")
+  productsArchived Product[]       @relation("ProductArchivedBy")
+  stockMovements   StockMovement[] @relation("StockMovementCreatedBy")
+
+  suppliersCreated        Supplier[]        @relation("SupplierCreatedBy")
+  suppliersUpdated        Supplier[]        @relation("SupplierUpdatedBy")
+  purchaseOrdersCreated   PurchaseOrder[]   @relation("PurchaseOrderCreatedBy")
+  purchaseOrdersOrdered   PurchaseOrder[]   @relation("PurchaseOrderOrderedBy")
+  purchaseOrdersCancelled PurchaseOrder[]   @relation("PurchaseOrderCancelledBy")
+  purchaseReceipts        PurchaseReceipt[] @relation("PurchaseReceiptReceivedBy")
+  auditLogs               AuditLog[]        @relation("AuditLogActor")
+
+  // The database itself guarantees there is never more than one owner.
+  @@unique([role], map: "users_single_owner_key", where: raw("role = 'OWNER'"))
+  @@index([role, isActive])
+  @@map("users")
+}
+
+model Session {
+  id            String    @id @default(uuid()) @db.Uuid
+  /// SHA-256 of the opaque cookie token; the raw token is never stored.
+  tokenHash     String    @unique @map("token_hash") @db.Char(64)
+  /// Synchronizer CSRF token bound to this session (useless without the HttpOnly cookie).
+  csrfToken     String    @map("csrf_token") @db.Char(64)
+  userId        String    @map("user_id") @db.Uuid
+  ipAddress     String?   @map("ip_address") @db.VarChar(45)
+  userAgent     String?   @map("user_agent") @db.VarChar(512)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason String?   @map("revoked_reason") @db.VarChar(40)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ─── Catalog (Phase 3) ───────────────────────────────────────────────────────
+
+model Category {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(60)
+  /// Lower-cased, whitespace-collapsed name: makes "Soft Drinks" and " soft  drinks" the same category.
+  nameKey     String   @unique @map("name_key") @db.VarChar(60)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  products Product[]
+
+  @@map("categories")
+}
+
+/// Products are never deleted, only archived: sale and purchase lines (later phases) reference
+/// them. The migration installs a trigger that rejects DELETE on this table outright.
+model Product {
+  id               String    @id @default(uuid()) @db.Uuid
+  /// Stored upper-cased. Unique across all products, archived included, so an SKU printed on an
+  /// old invoice always identifies exactly one product.
+  sku              String    @unique @db.VarChar(64)
+  /// Unique among active products only (partial index below): a barcode can be reassigned once
+  /// the product that carried it is archived.
+  barcode          String?   @db.VarChar(64)
+  name             String    @db.VarChar(160)
+  description      String?   @db.VarChar(2000)
+  costPrice        Decimal   @map("cost_price") @db.Decimal(12, 2)
+  sellingPrice     Decimal   @map("selling_price") @db.Decimal(12, 2)
+  /// Stock level at or below which the product needs reordering (used from the inventory phase on).
+  reorderThreshold Int       @default(0) @map("reorder_threshold")
+  categoryId       String?   @map("category_id") @db.Uuid
+  archivedAt       DateTime? @map("archived_at") @db.Timestamptz(3)
+  archivedById     String?   @map("archived_by_id") @db.Uuid
+  createdById      String?   @map("created_by_id") @db.Uuid
+  updatedById      String?   @map("updated_by_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  createdBy  User?     @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy  User?     @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  archivedBy User?     @relation("ProductArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+
+  inventoryLevels      InventoryLevel[]
+  stockMovements       StockMovement[]
+  purchaseOrderLines   PurchaseOrderLine[]
+  purchaseReceiptLines PurchaseReceiptLine[]
+
+  @@unique([barcode], map: "products_active_barcode_key", where: raw("archived_at IS NULL AND barcode IS NOT NULL"))
+  @@index([archivedAt, name])
+  @@index([categoryId])
+  @@index([sellingPrice])
+  @@index([createdAt])
+  @@map("products")
+}
+
+// ─── Inventory (Phase 4) ─────────────────────────────────────────────────────
+
+/// A location that holds stock. The migration creates a default "Main Store" (code MAIN).
+model Store {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(80)
+  /// Short code for reports and receipts; stored upper-cased.
+  code      String   @unique @db.VarChar(16)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  inventoryLevels InventoryLevel[]
+  stockMovements  StockMovement[]
+  purchaseOrders  PurchaseOrder[]
+
+  @@map("stores")
+}
+
+/// On-hand quantity of one product in one store. A missing row means 0. Only ever changed by
+/// the inventory service, inside a transaction that locks the row and writes a StockMovement.
+model InventoryLevel {
+  productId String   @map("product_id") @db.Uuid
+  storeId   String   @map("store_id") @db.Uuid
+  /// Never negative: enforced by the service under a row lock and by a CHECK constraint.
+  quantity  Int      @default(0)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@id([productId, storeId])
+  @@index([storeId, quantity])
+  @@map("inventory_levels")
+}
+
+/// What caused a stock change. Sales and transfers add values in later phases.
+enum StockMovementType {
+  ADJUSTMENT
+  /// Goods received against a purchase order; `purchaseReceiptId` points at the receipt.
+  PURCHASE_RECEIPT
+}
+
+enum AdjustmentReason {
+  STOCK_COUNT
+  RECEIVED
+  CUSTOMER_RETURN
+  DAMAGED
+  EXPIRED
+  LOST
+  THEFT
+  RETURNED_TO_SUPPLIER
+  OTHER
+}
+
+/// Append-only ledger of every inventory change. Rows are immutable (a trigger rejects UPDATE
+/// and DELETE), and for each (product, store) the changes sum to the current on-hand quantity.
+model StockMovement {
+  id                String            @id @default(uuid()) @db.Uuid
+  productId         String            @map("product_id") @db.Uuid
+  storeId           String            @map("store_id") @db.Uuid
+  type              StockMovementType
+  /// Signed: positive adds stock, negative removes it. Never 0.
+  quantityChange    Int               @map("quantity_change")
+  quantityBefore    Int               @map("quantity_before")
+  quantityAfter     Int               @map("quantity_after")
+  /// Required for manual adjustments.
+  reason            AdjustmentReason?
+  note              String?           @db.VarChar(500)
+  /// Set for PURCHASE_RECEIPT movements: the receipt that brought the stock in.
+  purchaseReceiptId String?           @map("purchase_receipt_id") @db.Uuid
+  createdById       String?           @map("created_by_id") @db.Uuid
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  product         Product          @relation(fields: [productId], references: [id], onDelete: Restrict)
+  store           Store            @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  createdBy       User?            @relation("StockMovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  purchaseReceipt PurchaseReceipt? @relation(fields: [purchaseReceiptId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, createdAt])
+  @@index([productId, storeId, createdAt])
+  @@index([createdById])
+  @@index([purchaseReceiptId])
+  @@map("stock_movements")
+}
+
+// ─── Purchasing (Phase 5) ────────────────────────────────────────────────────
+
+/// A vendor stock is bought from. Deleted only while it has no purchase orders; otherwise
+/// deactivated, which hides it from new orders but keeps its history.
+model Supplier {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @db.VarChar(120)
+  /// Lower-cased, whitespace-collapsed name, so " Acme  Foods" and "acme foods" are one supplier.
+  nameKey      String   @unique @map("name_key") @db.VarChar(120)
+  contactName  String?  @map("contact_name") @db.VarChar(100)
+  email        String?  @db.VarChar(254)
+  phone        String?  @db.VarChar(40)
+  address      String?  @db.VarChar(500)
+  /// Free text such as "Net 30" or "Cash on delivery".
+  paymentTerms String?  @map("payment_terms") @db.VarChar(120)
+  notes        String?  @db.VarChar(2000)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdById  String?  @map("created_by_id") @db.Uuid
+  updatedById  String?  @map("updated_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy      User?           @relation("SupplierCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?           @relation("SupplierUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  purchaseOrders PurchaseOrder[]
+
+  @@index([isActive, name])
+  @@map("suppliers")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+/// An order to a supplier for delivery into one store. Lines are editable only while DRAFT;
+/// after that the order changes only through receipts and cancellation.
+model PurchaseOrder {
+  id            String              @id @default(uuid()) @db.Uuid
+  /// Human-facing sequential number, shown as PO-00042.
+  number        Int                 @unique @default(autoincrement())
+  supplierId    String              @map("supplier_id") @db.Uuid
+  storeId       String              @map("store_id") @db.Uuid
+  status        PurchaseOrderStatus @default(DRAFT)
+  expectedAt    DateTime?           @map("expected_at") @db.Date
+  note          String?             @db.VarChar(1000)
+  /// Sum of the lines' totals, recomputed in the same transaction whenever lines change.
+  total         Decimal             @default(0) @db.Decimal(14, 2)
+  orderedAt     DateTime?           @map("ordered_at") @db.Timestamptz(3)
+  orderedById   String?             @map("ordered_by_id") @db.Uuid
+  /// When the last outstanding unit arrived.
+  receivedAt    DateTime?           @map("received_at") @db.Timestamptz(3)
+  cancelledAt   DateTime?           @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById String?             @map("cancelled_by_id") @db.Uuid
+  cancelReason  String?             @map("cancel_reason") @db.VarChar(500)
+  createdById   String?             @map("created_by_id") @db.Uuid
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  supplier    Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  store       Store               @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  orderedBy   User?               @relation("PurchaseOrderOrderedBy", fields: [orderedById], references: [id], onDelete: SetNull)
+  cancelledBy User?               @relation("PurchaseOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  createdBy   User?               @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  lines       PurchaseOrderLine[]
+  receipts    PurchaseReceipt[]
+
+  @@index([status, createdAt])
+  @@index([supplierId, createdAt])
+  @@index([storeId, status])
+  @@map("purchase_orders")
+}
+
+/// One product on a purchase order. SKU and name are copied when the line is written, so the
+/// order reads the same even if the product is later renamed.
+model PurchaseOrderLine {
+  id               String  @id @default(uuid()) @db.Uuid
+  purchaseOrderId  String  @map("purchase_order_id") @db.Uuid
+  productId        String  @map("product_id") @db.Uuid
+  position         Int
+  sku              String  @db.VarChar(64)
+  productName      String  @map("product_name") @db.VarChar(160)
+  quantityOrdered  Int     @map("quantity_ordered")
+  /// Never above quantityOrdered: enforced under the order's row lock and by a CHECK constraint.
+  quantityReceived Int     @default(0) @map("quantity_received")
+  unitCost         Decimal @map("unit_cost") @db.Decimal(12, 2)
+  /// quantityOrdered × unitCost, exact; a CHECK constraint keeps it honest.
+  lineTotal        Decimal @map("line_total") @db.Decimal(14, 2)
+
+  purchaseOrder PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  receiptLines  PurchaseReceiptLine[]
+
+  @@unique([purchaseOrderId, productId])
+  @@index([productId])
+  @@map("purchase_order_lines")
+}
+
+/// One delivery booked against a purchase order. Immutable (trigger), like the stock ledger.
+model PurchaseReceipt {
+  id              String   @id @default(uuid()) @db.Uuid
+  purchaseOrderId String   @map("purchase_order_id") @db.Uuid
+  /// Client-generated key for the "receive" request: a retried or double-submitted request
+  /// finds the receipt it already created instead of receiving the goods twice.
+  idempotencyKey  String   @unique @map("idempotency_key") @db.Uuid
+  note            String?  @db.VarChar(500)
+  receivedById    String?  @map("received_by_id") @db.Uuid
+  receivedAt      DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  purchaseOrder  PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  receivedBy     User?                 @relation("PurchaseReceiptReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+  lines          PurchaseReceiptLine[]
+  stockMovements StockMovement[]
+
+  @@index([purchaseOrderId, receivedAt])
+  @@index([receivedAt])
+  @@map("purchase_receipts")
+}
+
+model PurchaseReceiptLine {
+  id                  String  @id @default(uuid()) @db.Uuid
+  receiptId           String  @map("receipt_id") @db.Uuid
+  purchaseOrderLineId String  @map("purchase_order_line_id") @db.Uuid
+  productId           String  @map("product_id") @db.Uuid
+  quantity            Int
+  /// Copied from the order line, so received value can be reported without extra joins.
+  unitCost            Decimal @map("unit_cost") @db.Decimal(12, 2)
+
+  receipt           PurchaseReceipt   @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  purchaseOrderLine PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id], onDelete: Restrict)
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([receiptId, purchaseOrderLineId])
+  @@index([purchaseOrderLineId])
+  @@index([productId])
+  @@map("purchase_receipt_lines")
+}
+
+// ─── Audit log ───────────────────────────────────────────────────────────────
+
+/// Append-only record of business events (who did what to which record). Written in the same
+/// transaction as the change it describes; a trigger rejects UPDATE and DELETE.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  /// Dotted event name, e.g. "purchase_order.received".
+  action     String   @db.VarChar(60)
+  entityType String   @map("entity_type") @db.VarChar(40)
+  entityId   String   @map("entity_id") @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  /// Event-specific facts (changed fields, quantities, totals).
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+  @@index([actorId])
+  @@map("audit_logs")
+}
