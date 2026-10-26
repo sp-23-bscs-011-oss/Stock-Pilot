@@ -11,6 +11,8 @@ import { Alert } from "../Alert";
 import { Dialog } from "../Dialog";
 import { Field } from "../Field";
 import { Spinner } from "../Spinner";
+import { isDefiniteRejection, usePendingSubmission } from "../../hooks/usePendingSubmission";
+import type { ReceiveInput } from "../../types/purchasing";
 
 interface ReceiveStockDialogProps {
   order: PurchaseOrderDetail | null;
@@ -34,7 +36,7 @@ export function ReceiveStockDialog({ order, onClose, onReceived }: ReceiveStockD
   );
 }
 
-function ReceiveForm({
+export function ReceiveForm({
   order,
   onBusyChange,
   onCancel,
@@ -46,12 +48,13 @@ function ReceiveForm({
   onReceived: ReceiveStockDialogProps["onReceived"];
 }) {
   const queryClient = useQueryClient();
+  const submission = usePendingSubmission<ReceiveInput>(`receipt:${order.id}`);
   const formRef = useRef<HTMLFormElement>(null);
   const openLines = order.lines.filter((line) => line.quantityOutstanding > 0);
   const [quantities, setQuantities] = useState<Record<string, string>>(() =>
-    Object.fromEntries(openLines.map((line) => [line.id, ""])),
+    Object.fromEntries(openLines.map((line) => [line.id, String(submission.saved?.lines.find((saved) => saved.lineId === line.id)?.quantity ?? "")])),
   );
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(submission.saved?.note ?? "");
   const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -61,14 +64,15 @@ function ReceiveForm({
 
   const mutation = useMutation({
     mutationFn: () =>
-      purchaseOrderService.receive(order.id, {
+      purchaseOrderService.receive(order.id, submission.prepare({
         idempotencyKey: idempotencyKey.current,
         note: note.trim() || null,
         lines: openLines.map((line) => ({ lineId: line.id, quantity: Number(quantities[line.id] || 0) })),
-      }),
+      })),
     onMutate: () => onBusyChange(true),
     onSettled: () => onBusyChange(false),
     onSuccess: (result) => {
+      submission.clear();
       queryClient.setQueryData(queryKeys.purchaseOrders.detail(order.id), result.order);
       void queryClient.invalidateQueries({ queryKey: queryKeys.purchaseOrders.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
@@ -76,9 +80,10 @@ function ReceiveForm({
       onReceived(result);
     },
     onError: (error) => {
-      // A definite rejection (validation, over-receipt) means nothing was booked, so the next
-      // attempt is a new request. Network failures keep the key: the first try may have landed.
-      if (error instanceof ApiError && error.status !== null && error.status < 500) {
+      // Only a business rejection resolves the attempt. Network/authentication failures
+      // keep the key because an earlier request may already have committed.
+      if (isDefiniteRejection(error)) {
+        submission.clear();
         idempotencyKey.current = crypto.randomUUID();
       }
       const errors: Record<string, string> = {};
@@ -96,6 +101,11 @@ function ReceiveForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (mutation.isPending) return;
+    if (submission.saved) {
+      mutation.mutate();
+      return;
+    }
     const errors: Record<string, string> = {};
     let any = false;
     for (const line of openLines) {
@@ -134,6 +144,7 @@ function ReceiveForm({
     <form ref={formRef} onSubmit={handleSubmit} noValidate aria-busy={pending}>
       <div className="dialog__content">
         {formError && <Alert tone="error">{formError}</Alert>}
+        {submission.saved && !pending && <Alert tone="warn">A delivery request is awaiting confirmation. Retry it to recover the receipt safely before recording another delivery.</Alert>}
 
         <div className="receive-toolbar">
           <span className="cell-secondary">
@@ -146,7 +157,7 @@ function ReceiveForm({
               setQuantities(Object.fromEntries(openLines.map((line) => [line.id, String(line.quantityOutstanding)])));
               setLineErrors({});
             }}
-            disabled={pending}
+            disabled={pending || !!submission.saved}
           >
             Fill all outstanding
           </button>
@@ -190,7 +201,7 @@ function ReceiveForm({
                       aria-invalid={lineErrors[line.id] ? true : undefined}
                       value={quantities[line.id] ?? ""}
                       onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))}
-                      disabled={pending}
+                      disabled={pending || !!submission.saved}
                     />
                     <div className="cell-secondary">of {line.quantityOutstanding} due</div>
                     {lineErrors[line.id] && <p className="form__error">{lineErrors[line.id]}</p>}
@@ -203,7 +214,7 @@ function ReceiveForm({
 
         <Field label="Delivery note (optional)" hint="E.g. the supplier's delivery note number, or what was missing.">
           {(control) => (
-            <input {...control} value={note} maxLength={500} onChange={(event) => setNote(event.target.value)} disabled={pending} />
+            <input {...control} value={note} maxLength={500} onChange={(event) => setNote(event.target.value)} disabled={pending || !!submission.saved} />
           )}
         </Field>
       </div>
@@ -217,7 +228,7 @@ function ReceiveForm({
         </button>
         <button type="submit" className="button" disabled={pending}>
           {pending && <Spinner size={14} label="Receiving" />}
-          {pending ? "Receiving…" : "Receive into stock"}
+          {pending ? "Receiving…" : submission.saved ? "Retry delivery confirmation" : "Receive into stock"}
         </button>
       </footer>
     </form>

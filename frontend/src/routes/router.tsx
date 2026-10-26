@@ -53,8 +53,10 @@ export const router = createBrowserRouter([
               }),
               guarded(paths.purchases, () => import("../pages/PurchasesPage"), {
                 new: () => import("../pages/PurchaseOrderEditorPage"),
+                history: () => import("../pages/PurchaseHistoryPage"),
                 ":id": () => import("../pages/PurchaseOrderDetailPage"),
                 ":id/edit": () => import("../pages/PurchaseOrderEditorPage"),
+                ":id/receive": () => import("../pages/ReceiveStockPage"),
               }),
               guarded(paths.pos, () => import("../pages/PosPage")),
               guarded(paths.sales, () => import("../pages/SalesPage")),

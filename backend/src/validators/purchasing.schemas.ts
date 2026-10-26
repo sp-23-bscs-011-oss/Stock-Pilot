@@ -75,6 +75,21 @@ export const updateSupplierSchema = z
 export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
 export type UpdateSupplierInput = z.infer<typeof updateSupplierSchema>;
 
+export const supplierStatusSchema = z.object({ isActive: z.boolean() }).strict();
+
+export const purchasePaymentSchema = z.object({
+  idempotencyKey: z.uuid(),
+  // Payments can cover an entire DECIMAL(14,2) order; require strings to preserve precision.
+  amount: z.string().trim().regex(/^\d{1,12}(\.\d{1,2})?$/, "Enter an amount with at most 2 decimal places")
+    .refine((value) => /[1-9]/.test(value), "Payment must be greater than zero"),
+  method: z.enum(["CASH", "BANK_TRANSFER", "CARD", "CHEQUE", "OTHER"]),
+  reference: optionalText(160, "Reference"),
+  paidAt: z.iso.date().refine((value) => value <= new Date().toISOString().slice(0, 10), "Payment date cannot be in the future")
+    .transform((value) => new Date(`${value}T00:00:00.000Z`)),
+}).strict();
+
+export type PurchasePaymentInput = z.infer<typeof purchasePaymentSchema>;
+
 export const SUPPLIER_SORT_FIELDS = ["name", "createdAt", "updatedAt"] as const;
 
 export const listSuppliersQuerySchema = z.object({

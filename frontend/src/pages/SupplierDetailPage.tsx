@@ -4,7 +4,8 @@ import { Link, useParams } from "react-router";
 import { Alert } from "../components/Alert";
 import { ErrorState } from "../components/ErrorState";
 import { PageHeader } from "../components/PageHeader";
-import { PageLoader } from "../components/PageLoader";
+import { PurchasingSkeleton as PageLoader } from "../components/purchasing/PurchasingSkeleton";
+import { useNoticeToast } from "../hooks/useNoticeToast";
 import { Pagination } from "../components/Pagination";
 import { ActivityLog } from "../components/purchasing/ActivityLog";
 import { PurchaseOrderTable } from "../components/purchasing/PurchaseOrderTable";
@@ -47,6 +48,7 @@ export default function SupplierDetailPage() {
 function SupplierView({ supplier }: { supplier: SupplierDetail }) {
   const [editing, setEditing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  useNoticeToast(notice);
   const { stats } = supplier;
 
   const contact: [string, string | null][] = [
@@ -94,10 +96,18 @@ function SupplierView({ supplier }: { supplier: SupplierDetail }) {
           <span className="summary-tile__value">{formatMoney(stats.receivedValue)}</span>
         </div>
         <div className="summary-tile">
-          <span className="summary-tile__label">Outstanding</span>
+          <span className="summary-tile__label">Goods still expected</span>
           <span className={`summary-tile__value${stats.openOrders > 0 ? " summary-tile__value--warn" : ""}`}>
             {formatMoney(stats.outstandingValue)}
           </span>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-tile__label">Payments recorded</span>
+          <span className="summary-tile__value">{formatMoney(stats.paidTotal)}</span>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-tile__label">Balance due</span>
+          <span className="summary-tile__value">{formatMoney(stats.balanceDue)}</span>
         </div>
       </div>
 

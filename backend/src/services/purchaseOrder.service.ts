@@ -6,6 +6,7 @@ import type {
   ListPurchaseOrdersQuery,
   PurchaseOrderInput,
   ReceivePurchaseOrderInput,
+  PurchasePaymentInput,
 } from "../validators/purchasing.schemas.js";
 import { auditInclude, recordAudit, toAuditDto } from "./audit.service.js";
 import { applyStockChange, TRANSACTION_OPTIONS } from "./inventory.service.js";
@@ -30,6 +31,7 @@ const summaryInclude = {
   store: { select: { id: true, name: true, code: true } },
   createdBy: person,
   lines: { select: { quantityOrdered: true, quantityReceived: true, unitCost: true } },
+  payments: { select: { amount: true } },
 } as const;
 
 const detailInclude = {
@@ -39,6 +41,7 @@ const detailInclude = {
   orderedBy: person,
   cancelledBy: person,
   lines: { orderBy: { position: "asc" } },
+  payments: { orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }, { id: "asc" }], include: { recordedBy: person } },
   receipts: {
     orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
     include: { receivedBy: person, lines: true },
@@ -67,6 +70,10 @@ function lineFigures(lines: { quantityOrdered: number; quantityReceived: number;
 
 function toSummaryDto(order: OrderSummary | OrderDetail) {
   const figures = lineFigures(order.lines);
+  const paid = order.payments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0));
+  const payable = order.status === "DRAFT" ? new Prisma.Decimal(0)
+    : order.status === "CANCELLED" ? figures.receivedValue : order.total;
+  const balance = payable.sub(paid);
   return {
     id: order.id,
     number: formatPurchaseOrderNumber(order.number),
@@ -75,6 +82,11 @@ function toSummaryDto(order: OrderSummary | OrderDetail) {
     store: { id: order.store.id, name: order.store.name, code: order.store.code },
     expectedAt: toDateOnly(order.expectedAt),
     total: order.total.toFixed(2),
+    payableTotal: payable.toFixed(2),
+    paidTotal: paid.toFixed(2),
+    balanceDue: balance.toFixed(2),
+    paymentStatus: payable.isZero() ? "NOT_DUE" as const : balance.isZero() ? "PAID" as const
+      : paid.isZero() ? "UNPAID" as const : "PARTIALLY_PAID" as const,
     receivedValue: figures.receivedValue.toFixed(2),
     lineCount: order.lines.length,
     unitsOrdered: figures.unitsOrdered,
@@ -104,6 +116,15 @@ function toDetailDto(order: OrderDetail, activity: Prisma.AuditLogGetPayload<{ i
     orderedBy: order.orderedBy,
     cancelledBy: order.cancelledBy,
     cancelReason: order.cancelReason,
+    payments: order.payments.map((payment) => ({
+      id: payment.id,
+      amount: payment.amount.toFixed(2),
+      method: payment.method,
+      reference: payment.reference,
+      paidAt: toDateOnly(payment.paidAt)!,
+      recordedBy: payment.recordedBy,
+      createdAt: payment.createdAt,
+    })),
     /** Value still due; 0 unless the order is open. */
     outstandingValue: (open ? outstandingValue : new Prisma.Decimal(0)).toFixed(2),
     lines: order.lines.map((line) => ({
@@ -431,6 +452,13 @@ export async function cancelPurchaseOrder(id: string, reason: string | null, act
       throw invalidStatus(locked.number, locked.status, "cancelled");
     }
 
+    // Cancelling removes the unreceived liability. Never strand an advance payment:
+    // a refund workflow would be required before allowing this cancellation.
+    const current = await getPurchaseOrder(id, tx);
+    if (new Prisma.Decimal(current.paidTotal).greaterThan(current.receivedValue)) {
+      throw AppError.conflict("Payments exceed the value already received. This order cannot be cancelled while it has an unallocated advance payment.", "PAYMENTS_PREVENT_CANCELLATION");
+    }
+
     const lines = await tx.purchaseOrderLine.findMany({
       where: { purchaseOrderId: id },
       select: { quantityOrdered: true, quantityReceived: true },
@@ -476,10 +504,11 @@ export async function receivePurchaseOrder(id: string, input: ReceivePurchaseOrd
 
       const previous = await tx.purchaseReceipt.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
-        select: { id: true, purchaseOrderId: true },
+        include: { lines: true },
       });
       if (previous) {
         if (previous.purchaseOrderId !== id) throw keyReused();
+        assertReceiptReplay(previous, input);
         return { replayed: true, receiptId: previous.id, order: await getPurchaseOrder(id, tx) };
       }
 
@@ -582,8 +611,9 @@ export async function receivePurchaseOrder(id: string, input: ReceivePurchaseOrd
     // Two requests with the same key for different orders raced past the lookup: the unique
     // index rejected the second. (Same-order duplicates are already serialized by the lock.)
     if (isUniqueViolation(error) && uniqueViolationMentions(error, "idempotency_key")) {
-      const previous = await prisma.purchaseReceipt.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+      const previous = await prisma.purchaseReceipt.findUnique({ where: { idempotencyKey: input.idempotencyKey }, include: { lines: true } });
       if (previous?.purchaseOrderId === id) {
+        assertReceiptReplay(previous, input);
         return { replayed: true, receiptId: previous.id, order: await getPurchaseOrder(id) };
       }
       throw keyReused();
@@ -593,5 +623,57 @@ export async function receivePurchaseOrder(id: string, input: ReceivePurchaseOrd
 }
 
 function keyReused() {
-  return AppError.conflict("This receiving request was already used for a different order.", "IDEMPOTENCY_KEY_REUSED");
+  return AppError.conflict("This request key was already used for a different order or different details.", "IDEMPOTENCY_KEY_REUSED");
+}
+
+function assertReceiptReplay(
+  receipt: { note: string | null; lines: { purchaseOrderLineId: string; quantity: number }[] },
+  input: ReceivePurchaseOrderInput,
+) {
+  const requested = input.lines.filter((line) => line.quantity > 0);
+  if (receipt.note !== input.note || requested.length !== receipt.lines.length ||
+    requested.some((line) => !receipt.lines.some((saved) => saved.purchaseOrderLineId === line.lineId && saved.quantity === line.quantity))) {
+    throw keyReused();
+  }
+}
+
+/** Every payment shares the order row lock with receipts and cancellation. Sum using
+ * decimals under that lock, so concurrent payments cannot both spend the same balance. */
+export async function recordPurchasePayment(id: string, input: PurchasePaymentInput, actorId: string) {
+  const replay = async (tx: Prisma.TransactionClient) => {
+    const previous = await tx.purchasePayment.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (!previous) return null;
+    if (previous.purchaseOrderId !== id || !previous.amount.equals(input.amount) || previous.method !== input.method ||
+      previous.reference !== input.reference || previous.paidAt.getTime() !== input.paidAt.getTime()) throw keyReused();
+    return { replayed: true, paymentId: previous.id, order: await getPurchaseOrder(id, tx) };
+  };
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const locked = await lockOrder(tx, id);
+      const previous = await replay(tx);
+      if (previous) return previous;
+      if (locked.status === "DRAFT") throw invalidStatus(locked.number, locked.status, "paid");
+      const order = await getPurchaseOrder(id, tx);
+      const amount = new Prisma.Decimal(input.amount);
+      if (amount.greaterThan(order.balanceDue)) {
+        throw AppError.conflict(`Payment exceeds the outstanding balance of ${order.balanceDue}.`, "OVERPAYMENT");
+      }
+      const payment = await tx.purchasePayment.create({ data: {
+        purchaseOrderId: id, idempotencyKey: input.idempotencyKey, amount,
+        method: input.method, reference: input.reference, paidAt: input.paidAt, recordedById: actorId,
+      } });
+      await recordAudit(tx, {
+        action: "purchase_order.payment_recorded", entityType: "purchase_order", entityId: id, actorId,
+        details: { paymentId: payment.id, amount: amount.toFixed(2), method: input.method, reference: input.reference },
+      });
+      return { replayed: false, paymentId: payment.id, order: await getPurchaseOrder(id, tx) };
+    }, TRANSACTION_OPTIONS);
+  } catch (error) {
+    if (isUniqueViolation(error) && uniqueViolationMentions(error, "idempotency_key")) {
+      const previous = await replay(prisma);
+      if (previous) return previous;
+      throw keyReused();
+    }
+    throw error;
+  }
 }

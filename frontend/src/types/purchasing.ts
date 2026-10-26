@@ -11,6 +11,8 @@ export interface SupplierStats {
   receivedValue: string;
   unitsReceived: number;
   outstandingValue: string;
+  paidTotal: string;
+  balanceDue: string;
   averageLeadTimeDays: number | null;
   lastOrderedAt: string | null;
 }
@@ -76,10 +78,38 @@ export interface SupplierReport {
     receivedValue: string;
     unitsReceived: number;
     outstandingValue: string;
+    paidTotal: string;
+    balanceDue: string;
   };
 }
 
 export type PurchaseOrderStatus = "DRAFT" | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CANCELLED";
+export type PaymentStatus = "NOT_DUE" | "UNPAID" | "PARTIALLY_PAID" | "PAID";
+export type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE" | "OTHER";
+
+export interface PurchasePaymentInput {
+  idempotencyKey: string;
+  amount: string;
+  method: PaymentMethod;
+  reference: string | null;
+  paidAt: string;
+}
+
+export interface PurchasePayment {
+  id: string;
+  amount: string;
+  method: PaymentMethod;
+  reference: string | null;
+  paidAt: string;
+  recordedBy: Person;
+  createdAt: string;
+}
+
+export interface PaymentResult {
+  replayed: boolean;
+  paymentId: string;
+  order: PurchaseOrderDetail;
+}
 
 export interface PurchaseOrderSummary {
   id: string;
@@ -91,6 +121,10 @@ export interface PurchaseOrderSummary {
   /** yyyy-mm-dd */
   expectedAt: string | null;
   total: string;
+  payableTotal: string;
+  paidTotal: string;
+  balanceDue: string;
+  paymentStatus: PaymentStatus;
   receivedValue: string;
   lineCount: number;
   unitsOrdered: number;
@@ -146,6 +180,7 @@ export interface PurchaseOrderDetail extends Omit<PurchaseOrderSummary, "supplie
   outstandingValue: string;
   lines: PurchaseOrderLine[];
   receipts: PurchaseReceipt[];
+  payments: PurchasePayment[];
   activity: AuditEntry[];
 }
 
@@ -164,6 +199,8 @@ export interface PurchaseOrderListParams {
   supplierId?: string;
   storeId?: string;
   productId?: string;
+  from?: string;
+  to?: string;
   sort: PurchaseOrderSortField;
   order: SortOrder;
 }

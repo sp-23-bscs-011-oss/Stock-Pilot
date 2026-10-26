@@ -1,16 +1,17 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
+import { z } from "zod";
 import { ErrorState } from "../components/ErrorState";
 import { PageHeader } from "../components/PageHeader";
-import { PageLoader } from "../components/PageLoader";
+import { PurchasingSkeleton as PageLoader } from "../components/purchasing/PurchasingSkeleton";
 import { Pagination } from "../components/Pagination";
 import { PurchaseOrderTable } from "../components/purchasing/PurchaseOrderTable";
-import { ORDER_STATUSES, statusLabels } from "../components/purchasing/purchasingLabels";
+import { ORDER_STATUSES, statusLabels, dayBoundary } from "../components/purchasing/purchasingLabels";
 import { usePageTitle } from "../hooks/usePageTitle";
 import { useSearchParamsUpdater } from "../hooks/useSearchParamsUpdater";
 import { queryKeys } from "../lib/queryKeys";
-import { newPurchaseOrderPath } from "../routes/paths";
+import { newPurchaseOrderPath, paths } from "../routes/paths";
 import { toApiError } from "../services/apiError";
 import { storeService } from "../services/inventoryService";
 import { purchaseOrderService, supplierService } from "../services/purchasingService";
@@ -43,13 +44,15 @@ function readParams(search: URLSearchParams): PurchaseOrderListParams & { tab: S
     open: tab === "open" ? "true" : undefined,
     supplierId: uuid("supplier"),
     storeId: uuid("store"),
+    from: z.iso.date().safeParse(search.get("from")).success ? dayBoundary(search.get("from")!, false) : undefined,
+    to: z.iso.date().safeParse(search.get("to")).success ? dayBoundary(search.get("to")!, true) : undefined,
     sort: sort && SORT_FIELDS.includes(sort) ? sort : "number",
     order: search.get("order") === "asc" ? "asc" : ("desc" as SortOrder),
   };
 }
 
-export default function PurchasesPage() {
-  usePageTitle("Purchases");
+export default function PurchasesPage({ history = false }: { history?: boolean }) {
+  usePageTitle(history ? "Purchase history" : "Purchases");
   const [searchParams, updateParams] = useSearchParamsUpdater();
   const { tab, ...params } = useMemo(() => readParams(searchParams), [searchParams]);
 
@@ -68,8 +71,8 @@ export default function PurchasesPage() {
     placeholderData: keepPreviousData,
   });
   const suppliersQuery = useQuery({
-    queryKey: queryKeys.suppliers.list({ page: 1, pageSize: 100, status: "all", sort: "name", order: "asc" }),
-    queryFn: ({ signal }) => supplierService.list({ page: 1, pageSize: 100, status: "all", sort: "name", order: "asc" }, signal),
+    queryKey: [...queryKeys.suppliers.options, "all"],
+    queryFn: ({ signal }) => supplierService.options("all", signal),
     staleTime: 60_000,
   });
   const storesQuery = useQuery({
@@ -91,22 +94,27 @@ export default function PurchasesPage() {
     return counts[value];
   };
 
-  const filtersActive = Boolean(params.search || params.supplierId || params.storeId);
+  const filtersActive = Boolean(params.search || params.supplierId || params.storeId || params.from || params.to);
   const clearFilters = () => {
     clearTimeout(searchTimer.current);
     setSearchText("");
-    updateParams({ q: undefined, supplier: undefined, store: undefined });
+    updateParams({ q: undefined, supplier: undefined, store: undefined, from: undefined, to: undefined });
   };
 
   return (
     <section>
       <PageHeader
-        title="Purchases"
-        description="Order stock from suppliers and receive it into inventory."
+        title={history ? "Purchase history" : "Purchases"}
+        description={history ? "Review orders, deliveries and payment balances by supplier and date." : "Order stock from suppliers and receive it into inventory."}
         actions={
+          <>
+          <Link className="button button--ghost" to={history ? paths.purchases : `${paths.purchases}/history`}>
+            {history ? "Purchase orders" : "Purchase history"}
+          </Link>
           <Link className="button" to={newPurchaseOrderPath()}>
             New purchase order
           </Link>
+          </>
         }
       />
 
@@ -144,7 +152,7 @@ export default function PurchasesPage() {
           <span className="visually-hidden">Supplier</span>
           <select value={params.supplierId ?? ""} onChange={(event) => updateParams({ supplier: event.target.value })}>
             <option value="">All suppliers</option>
-            {(suppliersQuery.data?.items ?? []).map((supplier) => (
+            {(suppliersQuery.data ?? []).map((supplier) => (
               <option key={supplier.id} value={supplier.id}>
                 {supplier.name}
                 {supplier.isActive ? "" : " (inactive)"}
@@ -170,6 +178,17 @@ export default function PurchasesPage() {
             Clear filters
           </button>
         )}
+      </div>
+
+      <div className="toolbar">
+        <label className="toolbar__date"><span>Created from</span>
+          <input type="date" value={searchParams.get("from") ?? ""} max={searchParams.get("to") || undefined}
+            onChange={(event) => updateParams({ from: event.target.value || undefined })} />
+        </label>
+        <label className="toolbar__date"><span>Created to</span>
+          <input type="date" value={searchParams.get("to") ?? ""} min={searchParams.get("from") || undefined}
+            onChange={(event) => updateParams({ to: event.target.value || undefined })} />
+        </label>
       </div>
 
       {query.isPending ? (

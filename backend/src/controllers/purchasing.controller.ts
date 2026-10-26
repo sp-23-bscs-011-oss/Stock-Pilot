@@ -15,6 +15,8 @@ import {
   receivePurchaseOrderSchema,
   supplierReportQuerySchema,
   updateSupplierSchema,
+  supplierStatusSchema,
+  purchasePaymentSchema,
 } from "../validators/purchasing.schemas.js";
 
 function idParam(params: unknown, notFound: string): string {
@@ -54,6 +56,22 @@ export const updateSupplier: RequestHandler = async (req, res) => {
 export const deleteSupplier: RequestHandler = async (req, res) => {
   await supplierService.deleteSupplier(supplierId(req.params), getAuth(req).user.id);
   res.status(204).end();
+};
+
+export const updateSupplierStatus: RequestHandler = async (req, res) => {
+  const input = supplierStatusSchema.parse(req.body);
+  res.json({ supplier: await supplierService.updateSupplier(supplierId(req.params), input, getAuth(req).user.id) });
+};
+
+export const listPurchaseReceipts: RequestHandler = async (req, res) => {
+  const order = await purchaseOrderService.getPurchaseOrder(orderId(req.params));
+  res.json({ receipts: order.receipts });
+};
+
+export const recordPurchasePayment: RequestHandler = async (req, res) => {
+  const input = purchasePaymentSchema.parse(req.body);
+  const result = await purchaseOrderService.recordPurchasePayment(orderId(req.params), input, getAuth(req).user.id);
+  res.status(result.replayed ? 200 : 201).json(result);
 };
 
 // ─── Purchase orders ─────────────────────────────────────────────────────────

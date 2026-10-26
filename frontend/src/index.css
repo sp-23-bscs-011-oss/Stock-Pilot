@@ -1,3 +1,8 @@
+/* Keep Phase 1–4 base styles. Only new shadcn utilities use the tw: prefix. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(tw);
+
 :root {
   --bg: #f6f7f9;
   --surface: #ffffff;
@@ -2063,4 +2068,20 @@ a {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
+}
+.payment-panel { margin-block: 1.5rem; }
+.payment-panel__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.payment-panel__heading .section-title { margin: 0; }
+.payment-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-block: 1rem; }
+.payment-summary dt { color: var(--text-muted); font-size: .85rem; }
+.payment-summary dd { margin: .25rem 0 0; font-size: 1.2rem; font-weight: 650; color: var(--text-strong); overflow-wrap: anywhere; }
+.supplier-actions { display: inline-block; min-width: 7rem; }
+.supplier-actions > summary { list-style: none; cursor: pointer; }
+.supplier-actions > summary::-webkit-details-marker { display: none; }
+.supplier-actions__menu { display: grid; padding: .35rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); text-align: start; }
+.supplier-actions__menu .button { justify-content: flex-start; }
+.supplier-actions[open] > summary { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 540px) {
+  .payment-summary { grid-template-columns: 1fr; gap: .65rem; }
+  .payment-summary > div { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
 }

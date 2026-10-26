@@ -21,6 +21,7 @@ export function createApiRouter() {
   router.use("/inventory", createInventoryRouter());
   router.use("/suppliers", createSuppliersRouter());
   router.use("/purchase-orders", createPurchaseOrdersRouter());
+  router.use("/purchases", createPurchaseOrdersRouter());
   router.use("/audit-logs", createAuditLogsRouter());
 
   return router;

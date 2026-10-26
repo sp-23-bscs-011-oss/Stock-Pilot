@@ -5,7 +5,7 @@ import { Alert } from "../components/Alert";
 import { ErrorState } from "../components/ErrorState";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
-import { PageLoader } from "../components/PageLoader";
+import { PurchasingSkeleton as PageLoader } from "../components/purchasing/PurchasingSkeleton";
 import { Spinner } from "../components/Spinner";
 import { ProductPicker } from "../components/purchasing/ProductPicker";
 import { usePageTitle } from "../hooks/usePageTitle";
@@ -89,8 +89,7 @@ export default function PurchaseOrderEditorPage() {
   });
   const suppliersQuery = useQuery({
     queryKey: queryKeys.suppliers.options,
-    queryFn: async ({ signal }) =>
-      (await supplierService.list({ page: 1, pageSize: 100, status: "active", sort: "name", order: "asc" }, signal)).items,
+    queryFn: ({ signal }) => supplierService.options("active", signal),
     staleTime: 60_000,
   });
   const storesQuery = useQuery({

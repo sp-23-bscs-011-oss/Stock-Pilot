@@ -50,6 +50,7 @@ model User {
   purchaseOrdersOrdered   PurchaseOrder[]   @relation("PurchaseOrderOrderedBy")
   purchaseOrdersCancelled PurchaseOrder[]   @relation("PurchaseOrderCancelledBy")
   purchaseReceipts        PurchaseReceipt[] @relation("PurchaseReceiptReceivedBy")
+  purchasePayments        PurchasePayment[] @relation("PurchasePaymentRecordedBy")
   auditLogs               AuditLog[]        @relation("AuditLogActor")
 
   // The database itself guarantees there is never more than one owner.
@@ -293,6 +294,7 @@ model PurchaseOrder {
   createdBy   User?               @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   lines       PurchaseOrderLine[]
   receipts    PurchaseReceipt[]
+  payments    PurchasePayment[]
 
   @@index([status, createdAt])
   @@index([supplierId, createdAt])
@@ -344,6 +346,35 @@ model PurchaseReceipt {
   @@index([purchaseOrderId, receivedAt])
   @@index([receivedAt])
   @@map("purchase_receipts")
+}
+
+enum PurchasePaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  CHEQUE
+  OTHER
+}
+
+/// Append-only supplier payments. Balances and payment status are derived independently
+/// of delivery status. The order lock serializes payments, receiving and cancellation.
+model PurchasePayment {
+  id              String                @id @default(uuid()) @db.Uuid
+  purchaseOrderId String                @map("purchase_order_id") @db.Uuid
+  idempotencyKey  String                @unique @map("idempotency_key") @db.Uuid
+  amount          Decimal               @db.Decimal(14, 2)
+  method          PurchasePaymentMethod
+  reference       String?               @db.VarChar(160)
+  paidAt          DateTime              @map("paid_at") @db.Date
+  recordedById    String                @map("recorded_by_id") @db.Uuid
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  recordedBy    User          @relation("PurchasePaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([purchaseOrderId, paidAt])
+  @@index([recordedById])
+  @@map("purchase_payments")
 }
 
 model PurchaseReceiptLine {

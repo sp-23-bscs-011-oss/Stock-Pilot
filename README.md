@@ -398,9 +398,11 @@ Errors you can expect:
 
 ## Suppliers and purchasing
 
+Phase 5 completion: see [API contract, payment rules, validation results, and full changed-file manifest](docs/phase5.md).
+
 ### Who can do what
 
-Purchasing shows costs and supplier terms, so it's management-only. Every endpoint below requires an owner or manager; cashiers get `403`.
+Purchasing shows costs and supplier terms, so it's management-only. Supplier and purchase operations require an owner or manager; recording payments requires the owner. Cashiers get `403`.
 
 | Action | Owner | Manager | Cashier |
 | ------ | :---: | :-----: | :-----: |
@@ -408,6 +410,7 @@ Purchasing shows costs and supplier terms, so it's management-only. Every endpoi
 | Create and edit draft purchase orders | yes | yes | no |
 | Place, cancel and receive purchase orders | yes | yes | no |
 | Purchase history, supplier report, audit log | yes | yes | no |
+| Record supplier payments | yes | no | no |
 
 ### Order lifecycle
 
@@ -420,7 +423,7 @@ DRAFT ──place──▶ ORDERED ──receive (some)──▶ PARTIALLY_RECEI
 - **Draft:** editable. Saving sends the whole order and replaces every line. A draft may have no lines; placing it needs at least one.
 - **Placing** (`DRAFT → ORDERED`) fixes the lines. Stock doesn't change: inventory goes up only when goods are received.
 - **Receiving** books one delivery. Lines can be received partially, over several deliveries, in any mix. The order becomes `RECEIVED` when nothing is outstanding.
-- **Cancelling** works for drafts and open orders. On a partially received order it cancels only the outstanding remainder; stock already received stays, and so do its receipts. Received and cancelled orders can't be cancelled.
+- **Cancelling** works for drafts and open orders unless payments exceed the value already received. On a partially received order it cancels only the outstanding remainder; stock already received stays, and so do its receipts. Received and cancelled orders can't be cancelled.
 
 ### Database changes (migration `20261023200000_purchasing`)
 
@@ -458,7 +461,7 @@ Money is always `DECIMAL` in the database, `Prisma.Decimal` in the API, and a 2-
 
 If any step fails (for example a quantity that would exceed the on-hand maximum), the transaction rolls back: no stock, movements, receipt or status change.
 
-The frontend creates one idempotency key when the Receive dialog opens and reuses it on retries. It makes a new key only after a definite rejection (4xx), when nothing was booked.
+The frontend persists the exact receipt/payment request and idempotency key in session storage, scoped to the signed-in user and order. Retries after a lost response, navigation, refresh, or authentication/CSRF failure reuse that payload. A different quantity or note with an already-used receipt key is rejected. Only a definitive business rejection or a confirmed success resolves the attempt.
 
 ### Audit log
 
@@ -468,7 +471,9 @@ Written in the same transaction as the change, so an event exists if and only if
 
 Stock changes are additionally recorded in the stock movement ledger, as before.
 
-### REST endpoints
+### REST endpoints (compatible original routes)
+
+The frontend now uses `/api/purchases`, `PATCH /:id`, and `POST /:id/submit`. The original `/api/purchase-orders` routes below remain supported. New status, receipt-list and payment routes are documented in [Phase 5](docs/phase5.md#api-contract).
 
 | Method | Path | Body / query | Success |
 | ------ | ---- | ------------ | ------- |
@@ -514,7 +519,7 @@ Errors you can expect:
 
 | File | Purpose |
 | ---- | ------- |
-| `pages/SuppliersPage.tsx` | Supplier list (search, status filter, open orders, outstanding and ordered value), add/edit, deactivate/reactivate, delete when never ordered from, and a **Purchasing report** tab. |
+| `pages/SuppliersPage.tsx` | Supplier list (search, status filter, open orders, outstanding and ordered value), add/edit, archive/reactivate action menus, and a **Purchasing report** tab. |
 | `pages/SupplierDetailPage.tsx` | Supplier figures, contact card, paged purchase history, activity log, "New purchase order" for that supplier. |
 | `pages/PurchasesPage.tsx` | Purchase history: status tabs with counts (including "Awaiting delivery"), search, supplier and store filters, sorting and paging in the URL. |
 | `pages/PurchaseOrderEditorPage.tsx` | Create and edit drafts: supplier (with payment terms), store, expected date, product lines with exact live totals, "Save draft" or "Save & mark as ordered". Server errors land on the exact line and field. |
@@ -530,7 +535,7 @@ Routes: `/suppliers/:id`, `/purchases/new` (`?supplier=` preselects), `/purchase
 
 ### Tests
 
-`npm test` in `backend/` now runs 183 tests. Phase 5 adds 48:
+`npm test` in `backend/` now runs 203 tests. The original purchasing suite contains 48 tests, and `tests/purchasePayments.test.ts` adds 20 payment, API contract and retry-integrity tests. Three Playwright browser tests cover the connected UI, lost-response recovery and roles. See [commands and results](docs/phase5.md#verification).
 - `tests/suppliers.test.ts` (18): authorization and CSRF; create with normalization and audit entry; blank optional fields; 5 validation cases; duplicate names ignoring case and spacing; update/deactivate/reactivate with the recorded changes; deleting only suppliers without orders; listing, search, status filters and paging; the report's ordered, received and outstanding values, cancelled orders excluded, totals and date range.
 - `tests/purchaseOrders.test.ts` (30):
   - **Drafts:** exact totals (`3 × 0.10 = 0.30`), sequential numbers, 7 validation cases, duplicate products, unknown or archived products, inactive suppliers, replacing lines and recomputing the total.

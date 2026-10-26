@@ -16,6 +16,7 @@ export function createSuppliersRouter() {
   router.get("/:id", purchasing.getSupplier);
   router.post("/", purchasing.createSupplier);
   router.patch("/:id", purchasing.updateSupplier);
+  router.patch("/:id/status", purchasing.updateSupplierStatus);
   router.delete("/:id", purchasing.deleteSupplier);
 
   return router;
@@ -29,9 +30,13 @@ export function createPurchaseOrdersRouter() {
   router.get("/:id", purchasing.getPurchaseOrder);
   router.post("/", purchasing.createPurchaseOrder);
   router.put("/:id", purchasing.updatePurchaseOrder);
+  router.patch("/:id", purchasing.updatePurchaseOrder);
+  router.post("/:id/submit", purchasing.placePurchaseOrder);
   router.post("/:id/order", purchasing.placePurchaseOrder);
   router.post("/:id/cancel", purchasing.cancelPurchaseOrder);
   router.post("/:id/receipts", purchasing.receivePurchaseOrder);
+  router.get("/:id/receipts", purchasing.listPurchaseReceipts);
+  router.post("/:id/payments", requireRole("OWNER"), purchasing.recordPurchasePayment);
 
   return router;
 }

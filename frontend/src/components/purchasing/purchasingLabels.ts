@@ -36,6 +36,7 @@ const actionLabels: Record<string, string> = {
   "purchase_order.ordered": "Marked as ordered",
   "purchase_order.received": "Stock received",
   "purchase_order.cancelled": "Order cancelled",
+  "purchase_order.payment_recorded": "Supplier payment recorded",
 };
 
 export function auditActionLabel(entry: AuditEntry): string {

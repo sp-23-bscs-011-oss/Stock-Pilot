@@ -5,7 +5,8 @@ import { Alert } from "../components/Alert";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorState } from "../components/ErrorState";
 import { PageHeader } from "../components/PageHeader";
-import { PageLoader } from "../components/PageLoader";
+import { PurchasingSkeleton as PageLoader } from "../components/purchasing/PurchasingSkeleton";
+import { useNoticeToast } from "../hooks/useNoticeToast";
 import { Pagination } from "../components/Pagination";
 import { SupplierFormDialog } from "../components/purchasing/SupplierFormDialog";
 import { SupplierReportView } from "../components/purchasing/SupplierReportView";
@@ -42,6 +43,7 @@ export default function SuppliersPage() {
   const tab = searchParams.get("tab") === "report" ? "report" : "list";
   const [editing, setEditing] = useState<Supplier | "new" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  useNoticeToast(notice);
 
   return (
     <section>
@@ -133,7 +135,7 @@ function SupplierList({ onEdit, onNotice }: { onEdit: (supplier: Supplier) => vo
   const action = useMutation({
     mutationFn: async ({ supplier, action: kind }: NonNullable<typeof confirming>) => {
       if (kind === "delete") await supplierService.remove(supplier.id);
-      else await supplierService.update(supplier.id, { isActive: kind === "reactivate" });
+      else await supplierService.setStatus(supplier.id, kind === "reactivate");
     },
     onSuccess: (_result, { supplier, action: kind }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
@@ -252,7 +254,10 @@ function SupplierList({ onEdit, onNotice }: { onEdit: (supplier: Supplier) => vo
                       {formatMoney(supplier.stats.orderedValue)}
                     </td>
                     <td className="data-table__actions align-end">
-                      <div className="table-actions">
+                      <details className="supplier-actions">
+                        <summary className="button button--ghost button--sm" aria-label={`Actions for ${supplier.name}`}>Actions</summary>
+                        <div className="supplier-actions__menu">
+                        <Link className="button button--ghost button--sm" to={supplierPath(supplier.id)}>View profile</Link>
                         <button type="button" className="button button--ghost button--sm" onClick={() => onEdit(supplier)}>
                           Edit
                         </button>
@@ -265,15 +270,14 @@ function SupplierList({ onEdit, onNotice }: { onEdit: (supplier: Supplier) => vo
                               supplier,
                               action: !supplier.isActive
                                 ? "reactivate"
-                                : supplier.stats.orderCount + supplier.stats.draftOrders === 0
-                                  ? "delete"
-                                  : "deactivate",
+                                : "deactivate",
                             });
                           }}
                         >
-                          {!supplier.isActive ? "Reactivate" : supplier.stats.orderCount + supplier.stats.draftOrders === 0 ? "Delete" : "Deactivate"}
+                          {!supplier.isActive ? "Reactivate" : "Archive"}
                         </button>
-                      </div>
+                        </div>
+                      </details>
                     </td>
                   </tr>
                 ))}

@@ -7,7 +7,7 @@ import { supplierPath } from "../../routes/paths";
 import { toApiError } from "../../services/apiError";
 import { supplierService } from "../../services/purchasingService";
 import { ErrorState } from "../ErrorState";
-import { PageLoader } from "../PageLoader";
+import { PurchasingSkeleton as PageLoader } from "./PurchasingSkeleton";
 import { dayBoundary } from "./purchasingLabels";
 
 /**
@@ -76,10 +76,18 @@ export function SupplierReportView() {
               <span className="summary-tile__value">{formatMoney(data.totals.receivedValue)}</span>
             </div>
             <div className="summary-tile">
-              <span className="summary-tile__label">Outstanding now</span>
+              <span className="summary-tile__label">Goods still expected</span>
               <span className={`summary-tile__value${Number(data.totals.outstandingValue) > 0 ? " summary-tile__value--warn" : ""}`}>
                 {formatMoney(data.totals.outstandingValue)}
               </span>
+            </div>
+            <div className="summary-tile">
+              <span className="summary-tile__label">Payments to date</span>
+              <span className="summary-tile__value">{formatMoney(data.totals.paidTotal)}</span>
+            </div>
+            <div className="summary-tile">
+              <span className="summary-tile__label">Balance due now</span>
+              <span className="summary-tile__value">{formatMoney(data.totals.balanceDue)}</span>
             </div>
           </div>
 
@@ -98,7 +106,10 @@ export function SupplierReportView() {
                     Received
                   </th>
                   <th scope="col" className="align-end">
-                    Outstanding
+                    Goods expected
+                  </th>
+                  <th scope="col" className="align-end">
+                    Balance due
                   </th>
                   <th scope="col" className="align-end">
                     Avg. lead time
@@ -129,6 +140,7 @@ export function SupplierReportView() {
                     <td data-label="Outstanding" className="align-end nowrap">
                       {formatMoney(stats.outstandingValue)}
                     </td>
+                    <td data-label="Balance due" className="align-end nowrap">{formatMoney(stats.balanceDue)}</td>
                     <td data-label="Avg. lead time" className="align-end nowrap">
                       {stats.averageLeadTimeDays === null ? <span className="cell-secondary">—</span> : `${stats.averageLeadTimeDays.toFixed(1)} days`}
                     </td>

@@ -191,6 +191,8 @@ export interface SupplierStats {
   unitsReceived: number;
   /** Value of goods still due on open orders. Always current, regardless of the date range. */
   outstandingValue: string;
+  paidTotal: string;
+  balanceDue: string;
   /** Mean days from placing an order to its first delivery; null without deliveries. */
   averageLeadTimeDays: number | null;
   lastOrderedAt: Date | null;
@@ -205,6 +207,8 @@ function emptyStats(): SupplierStats {
     receivedValue: "0.00",
     unitsReceived: 0,
     outstandingValue: "0.00",
+    paidTotal: "0.00",
+    balanceDue: "0.00",
     averageLeadTimeDays: null,
     lastOrderedAt: null,
   };
@@ -219,6 +223,8 @@ interface StatsRow {
   received_value: string;
   units_received: number;
   outstanding_value: string;
+  paid_total: string;
+  balance_due: string;
   avg_lead_days: string | null;
   last_ordered_at: Date | null;
 }
@@ -272,6 +278,20 @@ async function supplierStats(supplierIds: string[] | null, range: { from?: Date;
       LEFT JOIN purchase_order_lines l ON l.purchase_order_id = po.id
       WHERE po.status IN ('DRAFT', 'ORDERED', 'PARTIALLY_RECEIVED') ${onlySuppliers(Prisma.sql`po.supplier_id`)}
       GROUP BY po.supplier_id
+    ), financials AS (
+      SELECT po.supplier_id,
+             SUM(COALESCE(pay.paid, 0)) AS paid_total,
+             SUM((CASE WHEN po.status = 'CANCELLED' THEN COALESCE(goods.value, 0) ELSE po.total END)
+               - COALESCE(pay.paid, 0)) AS balance_due
+      FROM purchase_orders po
+      LEFT JOIN LATERAL (
+        SELECT SUM(amount) AS paid FROM purchase_payments WHERE purchase_order_id = po.id
+      ) pay ON true
+      LEFT JOIN LATERAL (
+        SELECT SUM(quantity_received * unit_cost) AS value FROM purchase_order_lines WHERE purchase_order_id = po.id
+      ) goods ON true
+      WHERE po.status <> 'DRAFT' ${onlySuppliers(Prisma.sql`po.supplier_id`)}
+      GROUP BY po.supplier_id
     )
     SELECT s.id AS supplier_id,
            COALESCE(p.order_count, 0) AS order_count,
@@ -281,12 +301,15 @@ async function supplierStats(supplierIds: string[] | null, range: { from?: Date;
            COALESCE(r.received_value, 0)::numeric(16, 2)::text AS received_value,
            COALESCE(r.units_received, 0) AS units_received,
            COALESCE(c.outstanding_value, 0)::numeric(16, 2)::text AS outstanding_value,
+           COALESCE(f.paid_total, 0)::numeric(18, 2)::text AS paid_total,
+           COALESCE(f.balance_due, 0)::numeric(18, 2)::text AS balance_due,
            p.avg_lead_days::numeric(10, 1)::text AS avg_lead_days,
            p.last_ordered_at
     FROM suppliers s
     LEFT JOIN placed p ON p.supplier_id = s.id
     LEFT JOIN received r ON r.supplier_id = s.id
     LEFT JOIN current_orders c ON c.supplier_id = s.id
+    LEFT JOIN financials f ON f.supplier_id = s.id
     WHERE true ${onlySuppliers(Prisma.sql`s.id`)}`;
 
   for (const row of rows) {
@@ -298,6 +321,8 @@ async function supplierStats(supplierIds: string[] | null, range: { from?: Date;
       receivedValue: row.received_value,
       unitsReceived: row.units_received,
       outstandingValue: row.outstanding_value,
+      paidTotal: row.paid_total,
+      balanceDue: row.balance_due,
       averageLeadTimeDays: row.avg_lead_days === null ? null : Number(row.avg_lead_days),
       lastOrderedAt: row.last_ordered_at,
     });
@@ -319,7 +344,8 @@ export async function supplierReport(query: SupplierReportQuery) {
     .map((supplier) => ({ supplier, stats: stats.get(supplier.id) ?? emptyStats() }))
     .filter(
       ({ supplier, stats: s }) =>
-        supplier.isActive || s.orderCount > 0 || s.unitsReceived > 0 || s.openOrders > 0,
+        supplier.isActive || s.orderCount > 0 || s.unitsReceived > 0 || s.openOrders > 0
+        || s.paidTotal !== "0.00" || s.balanceDue !== "0.00",
     )
     .sort(
       (a, b) =>
@@ -341,6 +367,8 @@ export async function supplierReport(query: SupplierReportQuery) {
       receivedValue: sum((s) => s.receivedValue),
       unitsReceived: rows.reduce((total, row) => total + row.stats.unitsReceived, 0),
       outstandingValue: sum((s) => s.outstandingValue),
+      paidTotal: sum((s) => s.paidTotal),
+      balanceDue: sum((s) => s.balanceDue),
     },
   };
 }

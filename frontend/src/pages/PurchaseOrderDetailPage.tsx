@@ -6,11 +6,11 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorState } from "../components/ErrorState";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
-import { PageLoader } from "../components/PageLoader";
+import { PurchasingSkeleton as PageLoader } from "../components/purchasing/PurchasingSkeleton";
+import { useNoticeToast } from "../hooks/useNoticeToast";
 import { ActivityLog } from "../components/purchasing/ActivityLog";
 import { formatDay } from "../components/purchasing/purchasingLabels";
 import { PurchaseStatusBadge } from "../components/purchasing/PurchaseStatusBadge";
-import { ReceiveStockDialog } from "../components/purchasing/ReceiveStockDialog";
 import { usePageTitle } from "../hooks/usePageTitle";
 import { formatDateTime, formatMoney } from "../lib/format";
 import { queryKeys } from "../lib/queryKeys";
@@ -19,6 +19,8 @@ import { editPurchaseOrderPath, paths, supplierPath } from "../routes/paths";
 import { toApiError } from "../services/apiError";
 import { purchaseOrderService } from "../services/purchasingService";
 import type { PurchaseOrderDetail } from "../types/purchasing";
+import { PaymentPanel } from "../components/purchasing/PaymentPanel";
+import { useCurrentUser } from "../auth/authContext";
 
 export default function PurchaseOrderDetailPage() {
   const { id = "" } = useParams();
@@ -48,10 +50,13 @@ export default function PurchaseOrderDetailPage() {
 }
 
 function OrderView({ order }: { order: PurchaseOrderDetail }) {
+  const user = useCurrentUser();
+  let pendingReceipt = false;
+  try { pendingReceipt = !!sessionStorage.getItem(`stockpilot:pending:${user.id}:receipt:${order.id}`); } catch { /* Storage can be disabled. */ }
   const queryClient = useQueryClient();
   const location = useLocation();
   const [notice, setNotice] = useState<string | null>((location.state as { notice?: string } | null)?.notice ?? null);
-  const [receiving, setReceiving] = useState(false);
+  useNoticeToast(notice);
   const [confirm, setConfirm] = useState<"place" | "cancel" | null>(null);
   const [cancelReason, setCancelReason] = useState("");
 
@@ -116,17 +121,13 @@ function OrderView({ order }: { order: PurchaseOrderDetail }) {
                 Mark as ordered
               </button>
             )}
-            {isOpen && (
-              <button
-                type="button"
+            {(isOpen || pendingReceipt) && (
+              <Link
                 className="button"
-                onClick={() => {
-                  setNotice(null);
-                  setReceiving(true);
-                }}
+                to={`/purchases/${order.id}/receive`}
               >
-                Receive stock
-              </button>
+                {pendingReceipt ? "Confirm saved delivery" : "Receive stock"}
+              </Link>
             )}
           </>
         }
@@ -276,7 +277,7 @@ function OrderView({ order }: { order: PurchaseOrderDetail }) {
             </div>
             {isOpen && (
               <div>
-                <dt>Outstanding</dt>
+                <dt>Goods still expected</dt>
                 <dd>{formatMoney(order.outstandingValue)}</dd>
               </div>
             )}
@@ -285,6 +286,8 @@ function OrderView({ order }: { order: PurchaseOrderDetail }) {
               <dd>{formatMoney(order.total)}</dd>
             </div>
           </dl>
+
+          <PaymentPanel order={order} onNotice={setNotice} />
 
           <h2 className="section-title">Deliveries</h2>
           {order.receipts.length === 0 ? (
@@ -331,19 +334,6 @@ function OrderView({ order }: { order: PurchaseOrderDetail }) {
           </div>
         </aside>
       </div>
-
-      <ReceiveStockDialog
-        order={receiving ? order : null}
-        onClose={() => setReceiving(false)}
-        onReceived={(result) => {
-          setReceiving(false);
-          const receipt = result.order.receipts.find((r) => r.id === result.receiptId);
-          setNotice(
-            `${receipt ? `${receipt.units} units` : "Stock"} received into ${result.order.store.name}. ` +
-              (result.order.status === "RECEIVED" ? "The order is now complete." : "The rest stays outstanding."),
-          );
-        }}
-      />
 
       <ConfirmDialog
         open={confirm === "place"}

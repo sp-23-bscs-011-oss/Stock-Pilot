@@ -6,6 +6,8 @@ import { auditActionLabel } from "./purchasingLabels";
 function describe(entry: AuditEntry): string | null {
   const d = entry.details ?? {};
   switch (entry.action) {
+    case "purchase_order.payment_recorded":
+      return `${formatMoney(String(d["amount"]))} · ${String(d["method"]).replaceAll("_", " ")}`;
     case "purchase_order.created":
       return `${d["lineCount"]} line${d["lineCount"] === 1 ? "" : "s"} · ${formatMoney(String(d["total"]))}`;
     case "purchase_order.updated": {

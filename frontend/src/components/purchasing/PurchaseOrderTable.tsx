@@ -5,6 +5,7 @@ import type { SortOrder } from "../../types/catalog";
 import type { PurchaseOrderSortField, PurchaseOrderSummary } from "../../types/purchasing";
 import { formatDay } from "./purchasingLabels";
 import { PurchaseStatusBadge } from "./PurchaseStatusBadge";
+import { PaymentStatusBadge } from "./PaymentStatusBadge";
 
 interface PurchaseOrderTableProps {
   orders: PurchaseOrderSummary[];
@@ -69,6 +70,7 @@ export function PurchaseOrderTable({ orders, sort, order, onSort, showSupplier =
             {header("Order", "number")}
             {showSupplier && header("Supplier")}
             {header("Status")}
+            {header("Payment")}
             {header("Created", "createdAt")}
             {header("Expected", "expectedAt")}
             {header("Received")}
@@ -94,6 +96,10 @@ export function PurchaseOrderTable({ orders, sort, order, onSort, showSupplier =
               )}
               <td data-label="Status">
                 <PurchaseStatusBadge status={po.status} />
+              </td>
+              <td data-label="Payment">
+                <PaymentStatusBadge status={po.paymentStatus} />
+                <div className="cell-secondary">{formatMoney(po.balanceDue)} due</div>
               </td>
               <td data-label="Created" className="nowrap">
                 {formatDateTime(po.createdAt)}

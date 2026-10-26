@@ -71,6 +71,8 @@ export function ProductPicker({ selectedIds, onPick, disabled }: ProductPickerPr
         <ul id={listId} className="product-picker__results" aria-live="polite">
           {query.isFetching && results.length === 0 ? (
             <li className="product-picker__empty">Searching…</li>
+          ) : query.isError ? (
+            <li className="product-picker__empty">Couldn't load products. <button type="button" className="button button--ghost button--sm" onClick={() => void query.refetch()}>Try again</button></li>
           ) : results.length === 0 ? (
             <li className="product-picker__empty">No active products match “{search}”.</li>
           ) : (
